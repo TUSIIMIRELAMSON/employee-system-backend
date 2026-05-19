@@ -7,7 +7,8 @@ load_dotenv()
 
 def get_connection():
     """Return a new database connection."""
-    return psycopg2.connect(os.environ["DATABASE_URL"])
+    url = os.environ["DATABASE_URL"]
+    return psycopg2.connect(url, sslmode="require", connect_timeout=10)
 
 def init_db():
     """Create all tables if they don't exist yet."""
