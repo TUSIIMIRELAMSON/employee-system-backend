@@ -362,6 +362,124 @@ def report_summary():
 # ── Init DB on startup (works with gunicorn too) ─────
 init_db()
 
+# ══════════════════════════════════════════════
+#  DELETE & UPDATE ROUTES
+# ══════════════════════════════════════════════
+
+@app.route("/api/employees/<int:emp_no>", methods=["DELETE"])
+@jwt_required()
+def delete_employee(emp_no):
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM employees_table WHERE emp_no = %s", (emp_no,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Employee deleted.")
+
+@app.route("/api/employees/<int:emp_no>", methods=["PUT"])
+@jwt_required()
+def update_employee(emp_no):
+    b = request.get_json()
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE employees_table
+            SET birth_date=%s, first_name=%s, last_name=%s, gender=%s, hire_date=%s
+            WHERE emp_no=%s
+        """, (b["birth_date"],b["first_name"],b["last_name"],b["gender"],b["hire_date"],emp_no))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Employee updated.")
+
+@app.route("/api/departments/<dept_no>", methods=["DELETE"])
+@jwt_required()
+def delete_department(dept_no):
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM departments WHERE dept_no = %s", (dept_no,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Department deleted.")
+
+@app.route("/api/departments/<dept_no>", methods=["PUT"])
+@jwt_required()
+def update_department(dept_no):
+    b = request.get_json()
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("UPDATE departments SET dept_name=%s WHERE dept_no=%s", (b["dept_name"], dept_no))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Department updated.")
+
+@app.route("/api/dept_manager/<int:emp_no>/<dept_no>", methods=["DELETE"])
+@jwt_required()
+def delete_dept_manager(emp_no, dept_no):
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM dept_manager WHERE emp_no=%s AND dept_no=%s", (emp_no, dept_no))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Dept manager deleted.")
+
+@app.route("/api/dept_employees/<int:emp_no>/<dept_no>", methods=["DELETE"])
+@jwt_required()
+def delete_dept_employee(emp_no, dept_no):
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM dept_employees WHERE emp_no=%s AND dept_no=%s", (emp_no, dept_no))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Dept employee deleted.")
+
+@app.route("/api/salaries/<int:emp_no>/<from_date>", methods=["DELETE"])
+@jwt_required()
+def delete_salary(emp_no, from_date):
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM salaries WHERE emp_no=%s AND from_date=%s", (emp_no, from_date))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Salary deleted.")
+
+@app.route("/api/salaries/<int:emp_no>/<from_date>", methods=["PUT"])
+@jwt_required()
+def update_salary(emp_no, from_date):
+    b = request.get_json()
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE salaries SET salary=%s, to_date=%s
+            WHERE emp_no=%s AND from_date=%s
+        """, (b["salary"], b["to_date"], emp_no, from_date))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Salary updated.")
+
 # ── Run (local dev only) ─────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
