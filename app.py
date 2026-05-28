@@ -61,10 +61,15 @@ def signup():
     conn = get_connection()
     cur  = conn.cursor()
     try:
-        cur.execute(
-            "INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
-            (name, email, hashed)
-        )
+        role = body.get("role", "user")  # default role is "user"
+if role not in ["admin", "user"]:
+    role = "user"
+cur.execute(
+    "INSERT INTO users (name, email, password, role) VALUES (%s, %s, %s, %s)",
+    (name, email, hashed, role)
+)
+
+
         conn.commit()
     except Exception:
         conn.rollback()
@@ -92,11 +97,11 @@ def signin():
     if not bcrypt.checkpw(password.encode(), user["password"].encode()):
         return err("Incorrect password.", 401)
 
-    token = create_access_token(identity=str(user["id"]))
-    return ok({
-        "token": token,
-        "user": {"name": user["name"], "email": user["email"]}
-    })
+   token = create_access_token(identity=str(user["id"]))
+return ok({
+    "token": token,
+    "user": {"name": user["name"], "email": user["email"], "role": user["role"]}
+})
 
 
 # ══════════════════════════════════════════════
