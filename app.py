@@ -6,6 +6,7 @@ from flask_jwt_extended import (
 )
 import bcrypt
 import os
+import datetime
 import psycopg2.extras
 from dotenv import load_dotenv
 from database import get_connection, init_db
@@ -20,8 +21,6 @@ jwt = JWTManager(app)
 
 
 # ── Helpers ─────────────────────────────────
-
-import datetime
 
 def format_dates(obj):
     """Recursively convert date/datetime objects to YYYY-MM-DD strings."""
@@ -58,18 +57,17 @@ def signup():
 
     hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
+    role = body.get("role", "user")
+    if role not in ["admin", "user"]:
+        role = "user"
+
     conn = get_connection()
     cur  = conn.cursor()
     try:
-        role = body.get("role", "user")  # default role is "user"
-if role not in ["admin", "user"]:
-    role = "user"
-cur.execute(
-    "INSERT INTO users (name, email, password, role) VALUES (%s, %s, %s, %s)",
-    (name, email, hashed, role)
-)
-
-
+        cur.execute(
+            "INSERT INTO users (name, email, password, role) VALUES (%s, %s, %s, %s)",
+            (name, email, hashed, role)
+        )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -97,11 +95,11 @@ def signin():
     if not bcrypt.checkpw(password.encode(), user["password"].encode()):
         return err("Incorrect password.", 401)
 
-   token = create_access_token(identity=str(user["id"]))
-return ok({
-    "token": token,
-    "user": {"name": user["name"], "email": user["email"], "role": user["role"]}
-})
+    token = create_access_token(identity=str(user["id"]))
+    return ok({
+        "token": token,
+        "user": {"name": user["name"], "email": user["email"], "role": user.get("role", "user")}
+    })
 
 
 # ══════════════════════════════════════════════
@@ -315,26 +313,21 @@ def report_summary():
     conn = get_connection()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Total employees
     cur.execute("SELECT COUNT(*) AS total FROM employees_table")
     total_employees = cur.fetchone()["total"]
 
-    # Total departments
     cur.execute("SELECT COUNT(*) AS total FROM departments")
     total_departments = cur.fetchone()["total"]
 
-    # Average salary
     cur.execute("SELECT ROUND(AVG(salary)::numeric, 2) AS avg FROM salaries")
     avg_salary = cur.fetchone()["avg"] or 0
 
-    # Gender split
     cur.execute("""
         SELECT gender, COUNT(*) AS count
         FROM employees_table GROUP BY gender
     """)
     gender = [dict(r) for r in cur.fetchall()]
 
-    # Employees per department
     cur.execute("""
         SELECT d.dept_name, COUNT(de.emp_no) AS count
         FROM departments d
@@ -344,7 +337,6 @@ def report_summary():
     """)
     per_dept = [dict(r) for r in cur.fetchall()]
 
-    # Salary by department
     cur.execute("""
         SELECT d.dept_name, ROUND(AVG(s.salary)::numeric, 0) AS avg_salary
         FROM salaries s
@@ -355,7 +347,6 @@ def report_summary():
     """)
     salary_by_dept = [dict(r) for r in cur.fetchall()]
 
-    # Hires per year
     cur.execute("""
         SELECT EXTRACT(YEAR FROM hire_date)::int AS year, COUNT(*) AS count
         FROM employees_table
@@ -366,18 +357,15 @@ def report_summary():
     cur.close(); conn.close()
 
     return ok({
-        "total_employees":  total_employees,
-        "total_departments": total_departments,
-        "avg_salary":       float(avg_salary),
-        "gender_split":     gender,
+        "total_employees":    total_employees,
+        "total_departments":  total_departments,
+        "avg_salary":         float(avg_salary),
+        "gender_split":       gender,
         "employees_per_dept": per_dept,
-        "salary_by_dept":   salary_by_dept,
-        "hires_by_year":    hires_by_year,
+        "salary_by_dept":     salary_by_dept,
+        "hires_by_year":      hires_by_year,
     })
 
-
-# ── Init DB on startup (works with gunicorn too) ─────
-init_db()
 
 # ══════════════════════════════════════════════
 #  DELETE & UPDATE ROUTES
@@ -497,7 +485,11 @@ def update_salary(emp_no, from_date):
         cur.close(); conn.close()
     return ok(msg="Salary updated.")
 
-# ── Run (local dev only) ─────────────────────────────
+
+# ── Init DB on startup ───────────────────────
+init_db()
+
+# ── Run (local dev only) ─────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
