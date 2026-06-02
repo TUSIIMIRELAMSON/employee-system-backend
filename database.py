@@ -68,7 +68,7 @@ def init_db():
             user_name  VARCHAR(100) NOT NULL,
             user_email VARCHAR(150) NOT NULL,
             content    TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT NOW()
+            created_at TIMESTAMPTZ DEFAULT NOW()
 );
                 
     """)

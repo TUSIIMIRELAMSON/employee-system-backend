@@ -531,10 +531,12 @@ def send_message():
     cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         cur2.execute("""
-            INSERT INTO messages (user_name, user_email, content)
-            VALUES (%s, %s, %s)
-            RETURNING id, user_name, user_email, content, created_at
-        """, (user["name"], user["email"], content))
+    INSERT INTO messages (user_name, user_email, content, created_at)
+    VALUES (%s, %s, %s, NOW())
+    RETURNING id, user_name, user_email, content, created_at
+""", (user["name"], user["email"], content))
+
+
         msg = dict(cur2.fetchone())
         conn.commit()
     except Exception as e:
