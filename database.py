@@ -62,6 +62,15 @@ def init_db():
             to_date   DATE NOT NULL,
             PRIMARY KEY (emp_no, from_date)
         );
+                
+        CREATE TABLE IF NOT EXISTS messages (
+            id         SERIAL PRIMARY KEY,
+            user_name  VARCHAR(100) NOT NULL,
+            user_email VARCHAR(150) NOT NULL,
+            content    TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+);
+                
     """)
 
     conn.commit()

@@ -484,6 +484,66 @@ def update_salary(emp_no, from_date):
     finally:
         cur.close(); conn.close()
     return ok(msg="Salary updated.")
+    
+    # ══════════════════════════════════════════════
+#  CHAT ROUTES
+# ══════════════════════════════════════════════
+
+@app.route("/api/messages", methods=["GET"])
+@jwt_required()
+def get_messages():
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT id, user_name, user_email, content, created_at
+        FROM messages
+        ORDER BY created_at ASC
+        LIMIT 100
+    """)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return ok([dict(r) for r in rows])
+
+
+@app.route("/api/messages", methods=["POST"])
+@jwt_required()
+def send_message():
+    body    = request.get_json()
+    content = (body.get("content") or "").strip()
+
+    if not content:
+        return err("Message cannot be empty.")
+    if len(content) > 1000:
+        return err("Message too long. Max 1000 characters.")
+
+    identity = get_jwt_identity()
+
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Get user info from token
+    cur.execute("SELECT name, email FROM users WHERE id = %s", (identity,))
+    user = cur.fetchone()
+    if not user:
+        cur.close(); conn.close()
+        return err("User not found.", 401)
+
+    cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur2.execute("""
+            INSERT INTO messages (user_name, user_email, content)
+            VALUES (%s, %s, %s)
+            RETURNING id, user_name, user_email, content, created_at
+        """, (user["name"], user["email"], content))
+        msg = dict(cur2.fetchone())
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return err(f"Could not send message: {str(e)}")
+    finally:
+        cur.close(); cur2.close(); conn.close()
+
+    return ok(format_dates(msg), msg="Message sent.", code=201)
 
 
 # ── Init DB on startup ───────────────────────
