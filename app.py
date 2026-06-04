@@ -23,12 +23,14 @@ jwt = JWTManager(app)
 # ── Helpers ─────────────────────────────────
 
 def format_dates(obj):
-    """Recursively convert date/datetime objects to YYYY-MM-DD strings."""
+    """Format dates as YYYY-MM-DD and datetimes as ISO string with Z."""
     if isinstance(obj, list):
         return [format_dates(i) for i in obj]
     if isinstance(obj, dict):
         return {k: format_dates(v) for k, v in obj.items()}
-    if isinstance(obj, (datetime.date, datetime.datetime)):
+    if isinstance(obj, datetime.datetime):
+        return obj.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(obj, datetime.date):
         return obj.strftime("%Y-%m-%d")
     return obj
 
