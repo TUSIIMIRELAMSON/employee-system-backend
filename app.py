@@ -829,6 +829,223 @@ def reject_manager(approval_id):
         cur.close(); conn.close()
     return ok(msg="Manager request rejected.")
 
+# ══════════════════════════════════════════════
+#  QR CODE & ONBOARDING ROUTES
+# ══════════════════════════════════════════════
+
+import secrets
+import re
+
+def generate_emp_id(company_name, company_id):
+    """Generate employee ID from company name initials + sequence."""
+    words   = re.findall(r'\b\w', company_name.upper())
+    prefix  = "".join(words[:4])
+    conn    = get_connection()
+    cur     = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM employees_table WHERE company_id = %s
+    """, (company_id,))
+    count = cur.fetchone()[0]
+    cur.close(); conn.close()
+    return f"{prefix}{str(count + 1).zfill(3)}"
+
+
+@app.route("/api/onboarding/generate", methods=["POST"])
+@jwt_required()
+def generate_onboarding_link():
+    """Admin generates a unique onboarding token for new employee."""
+    user  = get_current_user()
+    token = secrets.token_urlsafe(32)
+
+    conn = get_connection()
+    cur  = conn.cursor()
+    try:
+        cur.execute("""
+            INSERT INTO employee_submissions (company_id, token)
+            VALUES (%s, %s)
+        """, (user["company_id"], token))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return err(str(e))
+    finally:
+        cur.close(); conn.close()
+
+    return ok({"token": token}, msg="Onboarding link generated.")
+
+
+@app.route("/api/onboarding/<token>", methods=["GET"])
+def get_onboarding_info(token):
+    """Public route — get company info for onboarding form."""
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT es.id, es.status, c.company_name, c.registration_number
+        FROM employee_submissions es
+        JOIN companies c ON es.company_id = c.id
+        WHERE es.token = %s
+    """, (token,))
+    row = cur.fetchone()
+    cur.close(); conn.close()
+
+    if not row:
+        return err("Invalid or expired onboarding link.", 404)
+    if row["status"] != "pending":
+        return err("This onboarding link has already been used.", 400)
+
+    return ok({
+        "company_name":        row["company_name"],
+        "registration_number": row["registration_number"],
+    })
+
+
+@app.route("/api/onboarding/<token>", methods=["POST"])
+def submit_onboarding(token):
+    """Public route — employee submits their personal details."""
+    b = request.get_json()
+    required = ["first_name","last_name","gender","birth_date","phone","email"]
+    if not all(b.get(f) for f in required):
+        return err("Please fill in all required fields.")
+
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM employee_submissions WHERE token=%s", (token,))
+        submission = cur.fetchone()
+        if not submission:
+            return err("Invalid onboarding link.", 404)
+        if submission["status"] != "pending":
+            return err("This link has already been used.", 400)
+
+        cur.execute("""
+            UPDATE employee_submissions
+            SET first_name=%s, last_name=%s, gender=%s, birth_date=%s,
+                address=%s, phone=%s, email=%s,
+                status='submitted', submitted_at=NOW()
+            WHERE token=%s
+        """, (
+            b["first_name"], b["last_name"], b["gender"],
+            b["birth_date"], b.get("address",""), b["phone"],
+            b["email"], token
+        ))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return err(str(e))
+    finally:
+        cur.close(); conn.close()
+
+    return ok(msg="Your details have been submitted successfully! The manager will complete your registration.")
+
+
+@app.route("/api/submissions", methods=["GET"])
+@jwt_required()
+def get_submissions():
+    """Manager gets all employee submissions for their company."""
+    user = get_current_user()
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT * FROM employee_submissions
+        WHERE company_id = %s AND status = 'submitted'
+        ORDER BY submitted_at DESC
+    """, (user["company_id"],))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return ok([dict(r) for r in rows])
+
+
+@app.route("/api/submissions/count", methods=["GET"])
+@jwt_required()
+def get_submissions_count():
+    user = get_current_user()
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT COUNT(*) AS count FROM employee_submissions
+        WHERE company_id=%s AND status='submitted'
+    """, (user["company_id"],))
+    count = cur.fetchone()["count"]
+    cur.close(); conn.close()
+    return ok({"count": int(count)})
+
+
+@app.route("/api/onboarding/wizard/<token>", methods=["POST"])
+@jwt_required()
+def complete_from_submission(token):
+    """Manager completes registration from a submission."""
+    b    = request.get_json()
+    user = get_current_user()
+    cid  = user["company_id"]
+
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("""
+            SELECT * FROM employee_submissions
+            WHERE token=%s AND company_id=%s
+        """, (token, cid))
+        sub = cur.fetchone()
+        if not sub:
+            return err("Submission not found.", 404)
+
+        # Get company name for auto ID
+        cur.execute("SELECT company_name FROM companies WHERE id=%s", (cid,))
+        company = cur.fetchone()
+        auto_id = generate_emp_id(company["company_name"], cid)
+
+        is_manager      = b.get("employee_role","").lower() == "manager"
+        approval_status = "pending" if is_manager else "approved"
+
+        cur.execute("""
+            INSERT INTO employees_table
+              (company_id, emp_no, auto_emp_id, birth_date, first_name, last_name,
+               gender, hire_date, employee_role, approval_status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (cid, b["emp_no"], auto_id, sub["birth_date"],
+              sub["first_name"], sub["last_name"], sub["gender"],
+              b["hire_date"], b.get("employee_role","worker"), approval_status))
+
+        cur.execute("""
+            INSERT INTO dept_employees (company_id, emp_no, dept_no, from_date, to_date)
+            VALUES (%s,%s,%s,%s,%s)
+        """, (cid, b["emp_no"], b["dept_no"], b["from_date"], b["to_date"]))
+
+        if is_manager:
+            cur.execute("""
+                INSERT INTO dept_manager (company_id, emp_no, dept_no, from_date, to_date)
+                VALUES (%s,%s,%s,%s,%s)
+            """, (cid, b["emp_no"], b["dept_no"], b["from_date"], b["to_date"]))
+
+        cur.execute("""
+            INSERT INTO salaries (company_id, emp_no, salary, from_date, to_date)
+            VALUES (%s,%s,%s,%s,%s)
+        """, (cid, b["emp_no"], b["salary"], b["salary_from"], b["salary_to"]))
+
+        if is_manager and sub.get("email"):
+            cur.execute("""
+                INSERT INTO approvals
+                  (company_id, emp_no, employee_name, email, department, status)
+                VALUES (%s,%s,%s,%s,%s,'pending')
+            """, (cid, b["emp_no"],
+                  f"{sub['first_name']} {sub['last_name']}",
+                  sub["email"], b.get("dept_no","")))
+
+        # Mark submission as completed
+        cur.execute("""
+            UPDATE employee_submissions SET status='completed'
+            WHERE token=%s
+        """, (token,))
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return err(f"Could not complete registration: {str(e)}")
+    finally:
+        cur.close(); conn.close()
+
+    return ok({"auto_emp_id": auto_id}, msg="Employee registered successfully.", code=201)
+
 # ── Init DB ──────────────────────────────────
 init_db()
 
