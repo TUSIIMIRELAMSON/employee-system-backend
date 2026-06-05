@@ -647,6 +647,153 @@ def send_message():
     finally:
         cur.close(); conn.close()
     return ok(format_dates(msg), msg="Message sent.", code=201)
+  # ══════════════════════════════════════════════
+#  EMPLOYEE WIZARD ROUTE
+# ══════════════════════════════════════════════
+
+@app.route("/api/employees/wizard", methods=["POST"])
+@jwt_required()
+def employee_wizard():
+    b    = request.get_json()
+    user = get_current_user()
+    cid  = user["company_id"]
+
+    required = ["emp_no","birth_date","first_name","last_name",
+                "gender","hire_date","dept_no","from_date","to_date",
+                "salary","salary_from","salary_to","employee_role"]
+    if not all(b.get(f) for f in required):
+        return err("All fields are required.")
+
+    is_manager      = b["employee_role"].lower() == "manager"
+    approval_status = "pending" if is_manager else "approved"
+
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        # 1. Insert employee
+        cur.execute("""
+            INSERT INTO employees_table
+              (company_id, emp_no, birth_date, first_name, last_name,
+               gender, hire_date, employee_role, approval_status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (cid, b["emp_no"], b["birth_date"], b["first_name"],
+              b["last_name"], b["gender"], b["hire_date"],
+              b["employee_role"], approval_status))
+
+        # 2. Insert dept_employees
+        cur.execute("""
+            INSERT INTO dept_employees (company_id, emp_no, dept_no, from_date, to_date)
+            VALUES (%s,%s,%s,%s,%s)
+        """, (cid, b["emp_no"], b["dept_no"], b["from_date"], b["to_date"]))
+
+        # 3. If manager, insert dept_manager too
+        if is_manager:
+            cur.execute("""
+                INSERT INTO dept_manager (company_id, emp_no, dept_no, from_date, to_date)
+                VALUES (%s,%s,%s,%s,%s)
+            """, (cid, b["emp_no"], b["dept_no"], b["from_date"], b["to_date"]))
+
+        # 4. Insert salary
+        cur.execute("""
+            INSERT INTO salaries (company_id, emp_no, salary, from_date, to_date)
+            VALUES (%s,%s,%s,%s,%s)
+        """, (cid, b["emp_no"], b["salary"], b["salary_from"], b["salary_to"]))
+
+        # 5. If manager, create approval request
+        if is_manager:
+            dept_name = b.get("dept_name", b["dept_no"])
+            cur.execute("""
+                INSERT INTO approvals
+                  (company_id, emp_no, employee_name, email, department, status)
+                VALUES (%s,%s,%s,%s,%s,'pending')
+            """, (cid, b["emp_no"],
+                  f"{b['first_name']} {b['last_name']}",
+                  b.get("email",""), dept_name))
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return err(f"Could not save employee: {str(e)}")
+    finally:
+        cur.close(); conn.close()
+
+    return ok({
+        "is_manager": is_manager,
+        "approval_status": approval_status,
+    }, msg="Employee saved successfully.", code=201)
+
+
+# ══════════════════════════════════════════════
+#  APPROVALS ROUTES
+# ══════════════════════════════════════════════
+
+@app.route("/api/approvals", methods=["GET"])
+@jwt_required()
+def get_approvals():
+    user = get_current_user()
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT * FROM approvals
+        WHERE company_id = %s
+        ORDER BY requested_at DESC
+    """, (user["company_id"],))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return ok([dict(r) for r in rows])
+
+
+@app.route("/api/approvals/pending/count", methods=["GET"])
+@jwt_required()
+def get_pending_count():
+    user = get_current_user()
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT COUNT(*) AS count FROM approvals
+        WHERE company_id = %s AND status = 'pending'
+    """, (user["company_id"],))
+    count = cur.fetchone()["count"]
+    cur.close(); conn.close()
+    return ok({"count": int(count)})
+
+
+@app.route("/api/approvals/<int:approval_id>/approve", methods=["POST"])
+@jwt_required()
+def approve_manager(approval_id):
+    user = get_current_user()
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        # Get approval record
+        cur.execute("SELECT * FROM approvals WHERE id=%s AND company_id=%s",
+                    (approval_id, user["company_id"]))
+        approval = cur.fetchone()
+        if not approval:
+            return err("Approval not found.", 404)
+
+        # Update approval status
+        cur.execute("""
+            UPDATE approvals
+            SET status='approved', reviewed_by=%s, reviewed_at=NOW()
+            WHERE id=%s
+        """, (user["name"], approval_id))
+
+        # Update employee approval status
+        cur.execute("""
+            UPDATE employees_table
+            SET approval_status='approved'
+            WHERE company_id=%s AND emp_no=%s
+        """, (user["company_id"], approval["emp_no"]))
+
+        # Update user role to admin if email matches
+        if approval["email"]:
+            cur.execute("""
+                UPDATE users SET role='admin'
+                WHERE company_id=%s AND email=%s
+            """, (user["company_id"], approval["email"]))
+
+        conn.commit()
 
 
 # ── Init DB ──────────────────────────────────
