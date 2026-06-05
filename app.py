@@ -793,7 +793,47 @@ def approve_manager(approval_id):
                 WHERE company_id=%s AND email=%s
             """, (user["company_id"], approval["email"]))
 
+       conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Manager approved successfully.")
+
+
+@app.route("/api/approvals/<int:approval_id>/reject", methods=["POST"])
+@jwt_required()
+def reject_manager(approval_id):
+    user = get_current_user()
+    conn = get_connection()
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    try:
+        cur.execute("SELECT * FROM approvals WHERE id=%s AND company_id=%s",
+                    (approval_id, user["company_id"]))
+        approval = cur.fetchone()
+        if not approval:
+            return err("Approval not found.", 404)
+
+        cur.execute("""
+            UPDATE approvals
+            SET status='rejected', reviewed_by=%s, reviewed_at=NOW()
+            WHERE id=%s
+        """, (user["name"], approval_id))
+
+        cur.execute("""
+            UPDATE employees_table
+            SET approval_status='rejected'
+            WHERE company_id=%s AND emp_no=%s
+        """, (user["company_id"], approval["emp_no"]))
+
         conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Manager request rejected.")
 
 
 # ── Init DB ──────────────────────────────────
