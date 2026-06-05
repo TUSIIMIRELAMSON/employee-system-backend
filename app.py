@@ -647,7 +647,10 @@ def send_message():
     finally:
         cur.close(); conn.close()
     return ok(format_dates(msg), msg="Message sent.", code=201)
-  # ══════════════════════════════════════════════
+
+
+# ── Init DB ──────────────────────────────────
+# ══════════════════════════════════════════════
 #  EMPLOYEE WIZARD ROUTE
 # ══════════════════════════════════════════════
 
@@ -670,7 +673,6 @@ def employee_wizard():
     conn = get_connection()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
-        # 1. Insert employee
         cur.execute("""
             INSERT INTO employees_table
               (company_id, emp_no, birth_date, first_name, last_name,
@@ -680,26 +682,22 @@ def employee_wizard():
               b["last_name"], b["gender"], b["hire_date"],
               b["employee_role"], approval_status))
 
-        # 2. Insert dept_employees
         cur.execute("""
             INSERT INTO dept_employees (company_id, emp_no, dept_no, from_date, to_date)
             VALUES (%s,%s,%s,%s,%s)
         """, (cid, b["emp_no"], b["dept_no"], b["from_date"], b["to_date"]))
 
-        # 3. If manager, insert dept_manager too
         if is_manager:
             cur.execute("""
                 INSERT INTO dept_manager (company_id, emp_no, dept_no, from_date, to_date)
                 VALUES (%s,%s,%s,%s,%s)
             """, (cid, b["emp_no"], b["dept_no"], b["from_date"], b["to_date"]))
 
-        # 4. Insert salary
         cur.execute("""
             INSERT INTO salaries (company_id, emp_no, salary, from_date, to_date)
             VALUES (%s,%s,%s,%s,%s)
         """, (cid, b["emp_no"], b["salary"], b["salary_from"], b["salary_to"]))
 
-        # 5. If manager, create approval request
         if is_manager:
             dept_name = b.get("dept_name", b["dept_no"])
             cur.execute("""
@@ -765,35 +763,31 @@ def approve_manager(approval_id):
     conn = get_connection()
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
-        # Get approval record
         cur.execute("SELECT * FROM approvals WHERE id=%s AND company_id=%s",
                     (approval_id, user["company_id"]))
         approval = cur.fetchone()
         if not approval:
             return err("Approval not found.", 404)
 
-        # Update approval status
         cur.execute("""
             UPDATE approvals
             SET status='approved', reviewed_by=%s, reviewed_at=NOW()
             WHERE id=%s
         """, (user["name"], approval_id))
 
-        # Update employee approval status
         cur.execute("""
             UPDATE employees_table
             SET approval_status='approved'
             WHERE company_id=%s AND emp_no=%s
         """, (user["company_id"], approval["emp_no"]))
 
-        # Update user role to admin if email matches
         if approval["email"]:
             cur.execute("""
                 UPDATE users SET role='admin'
                 WHERE company_id=%s AND email=%s
             """, (user["company_id"], approval["email"]))
 
-       conn.commit()
+        conn.commit()
     except Exception as e:
         conn.rollback()
         return err(str(e))
@@ -834,7 +828,6 @@ def reject_manager(approval_id):
     finally:
         cur.close(); conn.close()
     return ok(msg="Manager request rejected.")
-
 
 # ── Init DB ──────────────────────────────────
 init_db()
