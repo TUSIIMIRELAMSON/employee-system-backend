@@ -164,8 +164,8 @@ def signup():
 @app.route("/api/signin", methods=["POST"])
 def signin():
     b = request.get_json()
-    email    = (b.get("email") or "").strip().lower()
-    password = (b.get("password") or "")
+    email      = (b.get("email") or "").strip().lower()
+    password   = (b.get("password") or "")
     company_id = b.get("company_id")
 
     if not company_id:
@@ -178,12 +178,63 @@ def signin():
         (email, company_id)
     )
     user = cur.fetchone()
-    cur.close(); conn.close()
 
     if not user:
+        cur.close(); conn.close()
         return err("No account found with that email in your company.", 401)
+
+    # ── Check if account is locked ───────────────
+    if user.get("locked_until"):
+        locked_until = user["locked_until"]
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=datetime.timezone.utc)
+        if now < locked_until:
+            minutes_left = int((locked_until - now).total_seconds() / 60) + 1
+            cur.close(); conn.close()
+            return err(f"Account locked due to too many failed attempts. Try again in {minutes_left} minute(s).", 403)
+        else:
+            # Lock expired — reset
+            cur2 = conn.cursor()
+            cur2.execute(
+                "UPDATE users SET login_attempts=0, locked_until=NULL WHERE id=%s",
+                (user["id"],)
+            )
+            conn.commit()
+            cur2.close()
+
+    # ── Check password ───────────────────────────
     if not bcrypt.checkpw(password.encode(), user["password"].encode()):
-        return err("Incorrect password.", 401)
+        attempts = (user.get("login_attempts") or 0) + 1
+        cur2 = conn.cursor()
+        if attempts >= 5:
+            # Lock account for 30 minutes
+            cur2.execute("""
+                UPDATE users
+                SET login_attempts=%s, locked_until=NOW() + INTERVAL '30 minutes'
+                WHERE id=%s
+            """, (attempts, user["id"]))
+            conn.commit()
+            cur2.close(); cur.close(); conn.close()
+            return err("Too many failed attempts. Account locked for 30 minutes.", 403)
+        else:
+            cur2.execute(
+                "UPDATE users SET login_attempts=%s WHERE id=%s",
+                (attempts, user["id"])
+            )
+            conn.commit()
+            cur2.close(); cur.close(); conn.close()
+            remaining = 5 - attempts
+            return err(f"Incorrect password. {remaining} attempt(s) remaining before lockout.", 401)
+
+    # ── Success — reset attempts ─────────────────
+    cur2 = conn.cursor()
+    cur2.execute(
+        "UPDATE users SET login_attempts=0, locked_until=NULL WHERE id=%s",
+        (user["id"],)
+    )
+    conn.commit()
+    cur2.close(); cur.close(); conn.close()
 
     token = create_access_token(identity=str(user["id"]))
     return ok({
@@ -647,6 +698,26 @@ def send_message():
     finally:
         cur.close(); conn.close()
     return ok(format_dates(msg), msg="Message sent.", code=201)
+
+
+@app.route("/api/users/unlock/<int:user_id>", methods=["POST"])
+@jwt_required()
+def unlock_user(user_id):
+    user = get_current_user()
+    if user.get("role") != "admin":
+        return err("Only admins can unlock accounts.", 403)
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute("""
+            UPDATE users SET login_attempts=0, locked_until=NULL
+            WHERE id=%s AND company_id=%s
+        """, (user_id, user["company_id"]))
+        conn.commit()
+    except Exception as e:
+        conn.rollback(); return err(str(e))
+    finally:
+        cur.close(); conn.close()
+    return ok(msg="Account unlocked successfully.")
 
 
 # ── Init DB ──────────────────────────────────
